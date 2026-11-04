@@ -1,0 +1,3 @@
+Files under upstream/ and the forks in config/ (my-main, my-files) are
+copied from the Herdr app and modified as listed in AGENTS.md.
+Herdr is licensed under the Apache License 2.0: see LICENSE-herdr.
