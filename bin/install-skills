@@ -1,0 +1,19 @@
+#!/bin/sh
+# Symlink each skills/<name>/ into ~/.claude/skills/<name>, so edits here are live.
+# Refuses to replace a real folder that isn't already our link.
+set -eu
+repo=$(cd "$(dirname "$0")/.." && pwd)
+dest="$HOME/.claude/skills"
+mkdir -p "$dest"
+for dir in "$repo"/skills/*/; do
+  name=$(basename "$dir")
+  target="$dest/$name"
+  if [ -L "$target" ]; then
+    rm "$target"
+  elif [ -e "$target" ]; then
+    echo "skip   $name: $target exists and isn't a link; move it aside first" >&2
+    continue
+  fi
+  ln -s "${dir%/}" "$target"
+  echo "linked $target -> ${dir%/}"
+done

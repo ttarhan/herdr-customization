@@ -33,6 +33,7 @@ config/            mirrors ~/.config/herdr-app, holding only the files we own
   keys.json            add only when we rebind keys (see below)
   programs.json        add only when needed
 bin/sync           push/pull/status/watch between config/ and herdr home
+skills/            agent skills (herdr-core); bin/install-skills links them into ~/.claude/skills
 types/             gpui-kit.d.ts from the app (git-ignored, refreshed by sync)
 jsconfig.json      editor type-checking for config/mods/**/*.js
 ```

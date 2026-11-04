@@ -36,6 +36,7 @@ default layout.
 | `config/themes/` | color themes |
 | `config/settings.json` | zoom, sounds, appearance, fonts |
 | `bin/sync` | push / pull / status / watch |
+| `skills/` | agent skills; `bin/install-skills` links them into `~/.claude/skills` (see `skills/README.md`) |
 | `AGENTS.md` | how coding agents should work here |
 
 Reference for everything Herdr can do: `~/.config/herdr-app/AGENTS.md`
