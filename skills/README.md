@@ -33,12 +33,12 @@ Headless `claude -p` runs in a scratch git repo with Foreman installed:
 | Request | Runs | Result |
 |---|---|---|
 | Start a server, check it, stop it | 3 | all used `hc run --bg` / `hc kill` / `hc rm` |
-| Run a ~30 s test suite | 7 | 5/5 hc with the final skill; 1 earlier miss fixed by the load-time env read |
+| Run a ~30 s test suite | 7 | 6 used `hc run --bg` + `hc wait` (2 with the final skill). The 1 miss came from the first version, where the env check needed a permission prompt; that's what led to reading the env at load time |
 | "Use a sub-agent to…" | 3 | all used the `Agent` tool; skill not loaded |
 | "Start a foreman:scout agent…" | 3 | all used `Agent(foreman:scout)`; skill not loaded |
 | "Use hc to start a helper Claude agent" | 1 | `hc run --bg --name … claude "…"`, `hc wait`, report file, `kill`/`rm` |
 | "What files are in this folder?" | 2 | plain `ls`; no hc |
-| Slow suite with `HC_TERMINAL_ID` unset | 2 | skill loads, value empty, agent asks before using hc |
+| `HC_TERMINAL_ID` unset | 2 | skill loads, value empty, agent asks before using hc (1 slow-suite run, 1 load check with the final skill) |
 
 When upstream changes, diff it against this file and carry the change over,
 keeping both changes.
