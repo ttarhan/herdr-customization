@@ -70,6 +70,11 @@ herdr home into `config/`.
   A cloned layout still points at the shipped mods. Point its `content.mod`
   at your clone to change code. Every clone goes in the table under
   "On each Herdr update", with its original saved in `upstream/<version>/`.
+  `layout.clone` reorders the JSON keys. Rebuild a cloned layout in the
+  original's key order, so a plain `diff` against the original shows only
+  our changes, e.g.
+  `jq --indent 2 '{id} + {cloned_from: {name: "main", version: "0.1.13"}} + . | <our edits>' upstream/0.1.13/layouts/main.json`.
+  Herdr keeps the file as written (clicks go to `layouts/.state/`).
 - **Look-only changes** (theme, colors, fonts, sizes) go in
   `config/settings.json` when the layout leaves them unset. That needs no clone.
 - **`keys.json`**: any edit freezes the whole file as ours, and Herdr stops
@@ -125,9 +130,8 @@ still uses as its base.
    `~/.config/herdr-app/layouts/<from>.json` and `mods/<from>/` into it (leave
    out `jsconfig.json` and `*.d.ts`).
 2. For each clone, see what Herdr changed:
-   - mods: `diff -ru upstream/<base>/mods/<from> upstream/<new>/mods/<from>`
-   - layouts (clones reorder keys, so sort them first):
-     `diff <(jq -S . upstream/<base>/layouts/<from>.json) <(jq -S . upstream/<new>/layouts/<from>.json)`
+   `diff -ru upstream/<base>/mods/<from> upstream/<new>/mods/<from>`, and
+   `diff upstream/<base>/layouts/<from>.json upstream/<new>/layouts/<from>.json`.
 3. No changes: just set the Base column to `<new>`. Otherwise apply Herdr's
    changes to the clone in `config/` by hand, keeping what the table lists.
    Mod clones use `mods/<clone>/` in asset paths where the original says
@@ -136,7 +140,8 @@ still uses as its base.
    rename) than to merge.
 4. Check that only our changes remain:
    `diff <(sed 's|mods/<clone>/|mods/<from>/|g' config/mods/<clone>/main.js) upstream/<new>/mods/<from>/main.js`,
-   and `jq -S 'del(.cloned_from)'` on layouts.
+   and `diff config/layouts/<clone>.json upstream/<new>/layouts/<from>.json`
+   (plus the `cloned_from` lines).
 5. `bin/sync`, then look in the app (`herdr-app status`, `herdr-app shot`).
    Also read the new `~/.config/herdr-app/AGENTS.md` for changes that affect
    our own mods (renamed commands, `herdr` API changes).
