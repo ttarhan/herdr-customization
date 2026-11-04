@@ -1,0 +1,14 @@
+{
+  "// why": "Editor type-checking for mods in config/mods. types/gpui-kit.d.ts is copied from the running app by bin/sync (it bundles gpui-kit, gpui-base and herdr). Options match the jsconfig.json Herdr writes into each mod folder.",
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022"],
+    "checkJs": true,
+    "strict": true,
+    "strictNullChecks": false,
+    "noEmit": true
+  },
+  "include": ["config/mods/**/*.js", "types/*.d.ts"]
+}

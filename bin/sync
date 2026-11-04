@@ -1,0 +1,326 @@
+#!/usr/bin/env python3
+"""Sync this repo's config/ into the Herdr app home (~/.config/herdr-app).
+
+The repo is the source of truth. Herdr does not hot-reload symlinked mod
+folders (tested on 0.1.13), so files are copied, never linked.
+
+  bin/sync              push config/ -> herdr home, check mods, report errors
+  bin/sync push --force push even over files changed outside the repo
+  bin/sync pull [PATH]  copy files from herdr home into config/ (e.g. a clone
+                        made with layout.clone / mod.clone, or settings the
+                        app's Settings screen wrote). No PATH: pull drifted files.
+  bin/sync status       what differs between config/ and herdr home
+  bin/sync watch        push on every save (polls once a second)
+  bin/sync types        refresh types/gpui-kit.d.ts from the running app
+
+State of the last sync is kept in .sync-state.json (not committed) so a
+push never silently overwrites a file someone changed in herdr home.
+"""
+
+import hashlib
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+SRC = REPO / "config"
+STATE_FILE = REPO / ".sync-state.json"
+TYPES_DIR = REPO / "types"
+DEST = Path(os.environ.get("HERDR_APP_HOME") or Path.home() / ".config" / "herdr-app")
+
+# Files Herdr writes into mod folders; never synced either way.
+GENERATED = {"gpui-kit.d.ts", "jsconfig.json", ".DS_Store"}
+# Top-level things in herdr home that belong to Herdr, not to us.
+OFF_LIMITS = {
+    "AGENTS.md", "gpui-kit.d.ts", "herdr.d.ts", "frame", "icons", "data",
+    "view.json", "shared.json", "seen.json", "installed.json", "window.json",
+    "windows.json", "update-notes.json", "update-notes-cache.md",
+    "update-notes-media",
+}
+ERROR_FILES = ["keys.error", "settings.error", "programs.error", "layout.error"]
+
+
+def sha(path):
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def load_state():
+    try:
+        return json.loads(STATE_FILE.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(state):
+    STATE_FILE.write_text(json.dumps(dict(sorted(state.items())), indent=2) + "\n")
+
+
+def shipped():
+    """Names Herdr ships (and replaces on every start): mods and layouts."""
+    try:
+        installed = json.loads((DEST / "installed.json").read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set(), set()
+    mods, layouts = set(), set()
+    for key in installed:
+        if key.startswith("layout:"):
+            layouts.add(key.split(":", 1)[1])
+        elif not key.startswith("frame"):
+            mods.add(key)
+    return mods, layouts
+
+
+def forbidden(rel):
+    """Why this repo path must not be pushed, or None."""
+    parts = Path(rel).parts
+    if parts[0] in OFF_LIMITS or parts[0] == ".state" or (len(parts) > 1 and parts[1] == ".state"):
+        return "owned by Herdr"
+    mods, layouts = shipped()
+    if parts[0] == "mods" and len(parts) > 1 and parts[1] in mods:
+        return f"'{parts[1]}' is a shipped mod (clone it: herdr-app do mod.clone)"
+    if parts[0] == "layouts" and Path(rel).stem in layouts:
+        return f"'{Path(rel).stem}' is a shipped layout (clone it: herdr-app do layout.clone)"
+    return None
+
+
+def repo_files():
+    out = []
+    for p in sorted(SRC.rglob("*")):
+        if p.is_file() and p.name not in GENERATED and p.name != ".gitkeep":
+            out.append(p.relative_to(SRC).as_posix())
+    return out
+
+
+def copy_atomic(src, dst):
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=dst.parent, prefix=".sync-")
+    os.close(fd)
+    shutil.copyfile(src, tmp)
+    os.replace(tmp, dst)
+
+
+def classify(rel, state):
+    """in-sync | push | drift | conflict | new | missing-home"""
+    s, d = SRC / rel, DEST / rel
+    last = state.get(rel)
+    if not d.exists():
+        return "new" if last is None else "missing-home"
+    sh, dh = sha(s), sha(d)
+    if sh == dh:
+        return "in-sync"
+    if last is None:
+        return "conflict"  # exists in home, never synced by us, differs
+    if dh == last:
+        return "push"
+    if sh == last:
+        return "drift"
+    return "conflict"
+
+
+def run_checks(mod_dirs):
+    ok = True
+    for m in sorted(mod_dirs):
+        d = DEST / "mods" / m
+        if not (d / "main.js").exists():
+            continue
+        r = subprocess.run(["herdr-app", "check", str(d)], capture_output=True, text=True)
+        msg = "\n".join(l for l in (r.stdout + r.stderr).splitlines() if l.strip())
+        print(("  ok    " if r.returncode == 0 else "  FAIL  ") + f"check mods/{m}")
+        if r.returncode != 0:
+            ok = False
+            print("        " + msg.replace("\n", "\n        "))
+    return ok
+
+
+def report_errors():
+    """Herdr writes <name>.error for bad files and lists mod errors in status."""
+    time.sleep(1.5)  # let the app pick the change up
+    found = []
+    for name in ERROR_FILES:
+        p = DEST / name
+        if p.exists():
+            found.append(f"{name}: {p.read_text().strip()}")
+    for p in (DEST / "layouts").glob("*.error"):
+        found.append(f"layouts/{p.name}: {p.read_text().strip()}")
+    r = subprocess.run(["herdr-app", "status"], capture_output=True, text=True)
+    if r.returncode == 0:
+        try:
+            found += json.loads(r.stdout).get("errors", [])
+        except json.JSONDecodeError:
+            pass
+    for e in found:
+        print("  ERROR " + e.strip().replace("\n", "\n        "))
+    return not found
+
+
+def refresh_types(quiet=False):
+    # Any mod folder's copy bundles every module, including "herdr".
+    for cand in sorted((DEST / "mods").glob("*/gpui-kit.d.ts")):
+        TYPES_DIR.mkdir(exist_ok=True)
+        dst = TYPES_DIR / "gpui-kit.d.ts"
+        if not dst.exists() or sha(dst) != sha(cand):
+            shutil.copyfile(cand, dst)
+            if not quiet:
+                print(f"  types  {dst.relative_to(REPO)} refreshed from {cand.parent.name}")
+        return True
+    if not quiet:
+        print("  types  no mod folder with gpui-kit.d.ts yet; start Herdr once")
+    return False
+
+
+def push(force=False, quiet_when_clean=False):
+    state = load_state()
+    files = repo_files()
+    touched_mods, wrote, skipped = set(), [], []
+
+    for rel in files:
+        why = forbidden(rel)
+        if why:
+            skipped.append(f"{rel}: {why}")
+            continue
+        kind = classify(rel, state)
+        if kind == "in-sync":
+            state[rel] = sha(SRC / rel)
+            continue
+        if kind in ("drift", "conflict") and not force:
+            skipped.append(f"{rel}: changed in herdr home ({kind}); `bin/sync pull {rel}` or `push --force`")
+            continue
+        copy_atomic(SRC / rel, DEST / rel)
+        state[rel] = sha(SRC / rel)
+        wrote.append(rel)
+        if rel.startswith("mods/"):
+            touched_mods.add(Path(rel).parts[1])
+
+    # Files removed from the repo: remove from home too, if untouched there.
+    for rel in [r for r in state if r not in files]:
+        d = DEST / rel
+        if d.exists() and sha(d) != state[rel] and not force:
+            skipped.append(f"{rel}: deleted in repo but changed in herdr home; left in place")
+            continue
+        if d.exists():
+            d.unlink()
+            wrote.append(f"{rel} (removed)")
+        del state[rel]
+        parent = d.parent
+        while parent != DEST and parent.exists():
+            rest = [p for p in parent.iterdir() if p.name not in GENERATED]
+            if rest:
+                break
+            shutil.rmtree(parent)
+            parent = parent.parent
+
+    save_state(state)
+    refresh_types(quiet=True)
+
+    if not wrote and not skipped and quiet_when_clean:
+        return True
+    for w in wrote:
+        if w.endswith(" (removed)"):
+            print(f"  remove {w[:-10]}")
+        else:
+            print(f"  push   {w}")
+    for s in skipped:
+        print(f"  skip   {s}")
+    if not wrote and not skipped:
+        print("  nothing to push")
+    ok = run_checks(touched_mods)
+    if wrote:
+        ok = report_errors() and ok
+    return ok and not skipped
+
+
+def pull(paths):
+    state = load_state()
+    if not paths:
+        paths = [r for r in state if (DEST / r).exists() and (SRC / r).exists()
+                 and classify(r, state) in ("drift",)]
+        if not paths:
+            print("  nothing drifted")
+            return True
+    rels = []
+    for p in paths:
+        p = Path(p)
+        if p.is_absolute():
+            p = p.relative_to(DEST)
+        full = DEST / p
+        if full.is_dir():
+            rels += [f.relative_to(DEST).as_posix() for f in sorted(full.rglob("*"))
+                     if f.is_file() and f.name not in GENERATED]
+        elif full.is_file():
+            rels.append(p.as_posix())
+        else:
+            print(f"  missing {DEST / p}")
+            return False
+    for rel in rels:
+        if Path(rel).parts[0] in OFF_LIMITS:
+            print(f"  skip   {rel}: owned by Herdr")
+            continue
+        copy_atomic(DEST / rel, SRC / rel)
+        state[rel] = sha(SRC / rel)
+        print(f"  pull   {rel}")
+    save_state(state)
+    return True
+
+
+def status():
+    state = load_state()
+    files = repo_files()
+    clean = True
+    for rel in files:
+        why = forbidden(rel)
+        kind = "forbidden" if why else classify(rel, state)
+        if kind != "in-sync":
+            clean = False
+            print(f"  {kind:<12} {rel}" + (f"  ({why})" if why else ""))
+    for rel in state:
+        if rel not in files:
+            clean = False
+            print(f"  {'deleted':<12} {rel}  (will be removed from herdr home on push)")
+    if clean:
+        print(f"  in sync: {len(files)} files")
+    return clean
+
+
+def watch():
+    print(f"watching {SRC} -> {DEST} (ctrl-c to stop)")
+    push()
+    def snapshot():
+        return {p: p.stat().st_mtime for p in SRC.rglob("*") if p.is_file()}
+    last = snapshot()
+    while True:
+        time.sleep(1)
+        now = snapshot()
+        if now != last:
+            last = now
+            print(time.strftime("[%H:%M:%S]"))
+            push()
+
+
+def main(argv):
+    cmd = argv[0] if argv else "push"
+    args = argv[1:]
+    if cmd == "push":
+        return push(force="--force" in args)
+    if cmd == "pull":
+        return pull(args)
+    if cmd == "status":
+        return status()
+    if cmd == "watch":
+        try:
+            watch()
+        except KeyboardInterrupt:
+            return True
+    if cmd == "types":
+        return refresh_types()
+    print(__doc__)
+    return cmd in ("-h", "--help", "help")
+
+
+if __name__ == "__main__":
+    SRC.mkdir(exist_ok=True)
+    sys.exit(0 if main(sys.argv[1:]) else 1)

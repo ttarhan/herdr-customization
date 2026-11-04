@@ -1,0 +1,8 @@
+# Written by bin/sync / Herdr, never committed
+.sync-state.json
+types/
+config/**/gpui-kit.d.ts
+config/**/*.error
+.DS_Store
+*.png.tmp
+herdr-shot.png
