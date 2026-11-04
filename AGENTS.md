@@ -33,7 +33,7 @@ config/            mirrors ~/.config/herdr-app, holding only the files we own
   keys.json            add only when we rebind keys (see below)
   programs.json        add only when needed
 bin/sync           push/pull/status/watch between config/ and herdr home
-upstream/<ver>/    Herdr's originals of what we cloned (see "On each Herdr update")
+upstream/<ver>/    Herdr's originals of our forks (see "Forks of Herdr's files")
 skills/            agent skills (herdr-core); bin/install-skills links them into ~/.claude/skills
 types/             gpui-kit.d.ts from the app (git-ignored, refreshed by sync)
 jsconfig.json      editor type-checking for config/mods/**/*.js
@@ -60,28 +60,15 @@ herdr home into `config/`.
 - **Copy, never symlink.** On Herdr 0.1.13 a symlinked mod folder loads, but
   edits don't hot-reload and errors aren't reported. That's why `bin/sync` copies.
 - **Shipped layouts and mods are read-only.** Herdr replaces them on every
-  start. `bin/sync` refuses to push to a shipped name (it reads
-  `installed.json`). To change one, clone it in the app, adopt the clone, then edit it here:
-  ```sh
-  herdr-app do layout.clone '{"name":"main","as":"my-main"}'   # also switches to it
-  herdr-app do mod.clone '{"name":"files","as":"my-files"}'
-  bin/sync pull layouts/my-main.json mods/my-files
-  ```
-  A cloned layout still points at the shipped mods. Point its `content.mod`
-  at your clone to change code. Every clone goes in the table under
-  "On each Herdr update", with its original saved in `upstream/<version>/`.
-  `layout.clone` reorders the JSON keys. Rebuild a cloned layout in the
-  original's key order, so a plain `diff` against the original shows only
-  our changes, e.g.
-  `jq --indent 2 '{id} + {cloned_from: {name: "main", version: "0.1.13"}} + . | <our edits>' upstream/0.1.13/layouts/main.json`.
-  Herdr keeps the file as written (clicks go to `layouts/.state/`).
+  start, and `bin/sync` refuses to push to a shipped name (it reads
+  `installed.json`). To change one, fork it: see "Forks of Herdr's files".
 - **Look-only changes** (theme, colors, fonts, sizes) go in
   `config/settings.json` when the layout leaves them unset. That needs no clone.
 - **`keys.json`**: any edit freezes the whole file as ours, and Herdr stops
-  adding new default shortcuts to it. Only add `config/keys.json` when we
-  actually rebind something. Start from the current
-  `~/.config/herdr-app/keys.json` (`bin/sync pull keys.json`). Don't take plain
-  ctrl+letters that shells rely on unless the user asks.
+  adding new default shortcuts to it, so it's a fork too (see "Forks of
+  Herdr's files"). Only add `config/keys.json` when we actually rebind
+  something. Don't take plain ctrl+letters that shells rely on unless the
+  user asks.
 - **Settings screen drift.** The app's Settings screen writes `settings.json`
   (and the theme picker changes layouts). `bin/sync` won't overwrite a file
   changed outside the repo; it says so. Then run `bin/sync pull <file>` to keep
@@ -101,52 +88,98 @@ herdr home into `config/`.
 - **Sharing** a layout or mod (herdr.dev): give it a `RECIPE.md` and a
   `preview.png` in the format the reference describes.
 
-## On each Herdr update
+## Forks of Herdr's files
 
-Clones never get Herdr's updates. After Herdr updates (`herdr-app --version`
-differs from the newest folder in `upstream/`), carry Herdr's changes into
-every clone below.
+A **fork** is our copy of something Herdr ships, which Herdr then stops
+updating: a cloned layout, a cloned mod, or `keys.json` once we own it. Our
+own new layouts, mods and themes aren't forks, and neither is
+`settings.json` (Herdr never ships changes to it). Prefer settings over a
+fork whenever settings can do it.
 
-### Our clones
+### The standard
 
-Keep this table current: add a row when you clone something, change the
-"What we changed" column when you edit a clone, and remove the row when you
-delete one.
+- **One base version for all forks.** `upstream/<version>/` holds Herdr's
+  original of every fork, exactly as that version shipped it, at the same
+  paths as in herdr home (`layouts/main.json`, `mods/files/`, `keys.json`).
+  There is only ever one version folder. On a Herdr update, every fork
+  moves to the new version together.
+- **The folder name is the version.** A layout or mod clone's
+  `cloned_from.version` must equal it. `bin/sync` (push and status) prints a
+  `FORKS` warning when Herdr's version differs from the folder, when an
+  original is missing from it, or when a `cloned_from.version` doesn't match.
+- **Our changes stay small and listed.** Each fork has a row in the table
+  below saying what we changed. A plain `diff` between the fork and its
+  original shows only those changes (and `cloned_from`, and `mods/<clone>/`
+  asset paths in mods).
+- **Commit the fork, its original and its table row together.**
 
-| Clone | From | Base | What we changed |
-|---|---|---|---|
-| `layouts/my-main.json` | `main` | 0.1.13 | Files panel block (`id: files`) uses `my-files` instead of `files`. Nothing else. |
-| `mods/my-files/` | `files` | 0.1.13 | `main.js`: Markdown files (`md`, `markdown`, `mdown`, `mkd`, `mdx`) render with `TextView.markdown` and a Source/Preview toggle in the header; relative links open in the panel, URLs in the browser; Open ↗ (local, macOS) runs `open -a "Markdown Preview"`. The rest is upstream. |
+### Our forks
 
-`upstream/<version>/` holds Herdr's original files for each base, as shipped.
-They're the only record of what a clone started from, because Herdr
-overwrites its own copies on every update. Keep only the versions some clone
-still uses as its base.
+Keep this table current: add a row when you fork something, update "What
+we changed" whenever you edit a fork, and remove the row (and its original
+in `upstream/`) when you delete one.
 
-### Steps
+| Fork | Original | What we changed |
+|---|---|---|
+| `layouts/my-main.json` | `layouts/main.json` | Files panel block (`id: files`) uses `my-files` instead of `files`. Nothing else. |
+| `mods/my-files/` | `mods/files/` | `main.js`: Markdown files (`md`, `markdown`, `mdown`, `mkd`, `mdx`) render with `TextView.markdown` and a Source/Preview toggle in the header; relative links open in the panel, URLs in the browser; Open ↗ (local, macOS) runs `open -a "Markdown Preview"`. The rest is upstream. |
 
-1. Snapshot the new originals of everything in the table:
-   `mkdir -p upstream/<new>/{layouts,mods}`, then copy
-   `~/.config/herdr-app/layouts/<from>.json` and `mods/<from>/` into it (leave
-   out `jsconfig.json` and `*.d.ts`).
-2. For each clone, see what Herdr changed:
-   `diff -ru upstream/<base>/mods/<from> upstream/<new>/mods/<from>`, and
-   `diff upstream/<base>/layouts/<from>.json upstream/<new>/layouts/<from>.json`.
-3. No changes: just set the Base column to `<new>`. Otherwise apply Herdr's
-   changes to the clone in `config/` by hand, keeping what the table lists.
-   Mod clones use `mods/<clone>/` in asset paths where the original says
-   `mods/<from>/`. For a large rewrite, it's simpler to clone fresh
-   (`mod.clone`/`layout.clone` with a new name, pull, re-apply our changes,
-   rename) than to merge.
+### Making a fork
+
+Below, `<ver>` is the folder in `upstream/` (it equals `herdr-app --version`
+unless a Herdr update is pending; do that first).
+
+- **Layout**:
+  ```sh
+  herdr-app do layout.clone '{"name":"main","as":"my-main"}'   # also switches to it
+  cp ~/.config/herdr-app/layouts/main.json upstream/<ver>/layouts/
+  ```
+  `layout.clone` reorders the JSON keys. Run `bin/sync pull layouts/my-main.json`
+  (so sync tracks it), then overwrite `config/layouts/my-main.json` with the
+  original in its own key order:
+  `jq --indent 2 '{id} + {cloned_from: {name: "main", version: "<ver>"}} + . | <our edits>' upstream/<ver>/layouts/main.json`.
+  Herdr keeps the file as written (clicks go to `layouts/.state/`). A cloned
+  layout still points at the shipped mods: to change a mod's code, fork the
+  mod too and point the layout's `content.mod` at the fork.
+- **Mod**:
+  ```sh
+  herdr-app do mod.clone '{"name":"files","as":"my-files"}'
+  bin/sync pull mods/my-files
+  cp -R ~/.config/herdr-app/mods/files upstream/<ver>/mods/
+  rm -f upstream/<ver>/mods/files/{jsconfig.json,*.d.ts}
+  ```
+  The clone's own asset paths say `mods/my-files/` instead of `mods/files/`.
+- **`keys.json`**: before the first edit, while Herdr still owns the file:
+  `cp ~/.config/herdr-app/keys.json upstream/<ver>/` and
+  `bin/sync pull keys.json`. `keys.json` has no `cloned_from`; its version is
+  the folder's.
+
+Then add the table row.
+
+### On each Herdr update
+
+`bin/sync` warns when `herdr-app --version` differs from `upstream/<base>/`.
+`<new>` is the new version.
+
+1. Save the new originals of every fork in the table: `upstream/<new>/`
+   with the same paths (leave out `jsconfig.json` and `*.d.ts` in mods).
+   For `keys.json`, Herdr doesn't write new defaults into a file we own.
+   How to get the new version's default keys hasn't been worked out yet
+   (perhaps a scratch `HERDR_APP_HOME`); work it out the first time and
+   write it here.
+2. See what Herdr changed: `diff -ru upstream/<base> upstream/<new>`.
+3. Apply those changes to each fork in `config/`, keeping what the table
+   lists. For a large rewrite, it's simpler to clone fresh and re-apply our
+   changes than to merge.
 4. Check that only our changes remain:
-   `diff <(sed 's|mods/<clone>/|mods/<from>/|g' config/mods/<clone>/main.js) upstream/<new>/mods/<from>/main.js`,
-   and `diff config/layouts/<clone>.json upstream/<new>/layouts/<from>.json`
-   (plus the `cloned_from` lines).
-5. `bin/sync`, then look in the app (`herdr-app status`, `herdr-app shot`).
-   Also read the new `~/.config/herdr-app/AGENTS.md` for changes that affect
-   our own mods (renamed commands, `herdr` API changes).
-6. Update the Base column, delete `upstream/` folders no longer used as a
-   base, and commit ("Herdr <new>: update my-files, my-main").
+   `diff config/layouts/<fork>.json upstream/<new>/layouts/<original>.json`,
+   `diff <(sed 's|mods/<fork>/|mods/<original>/|g' config/mods/<fork>/main.js) upstream/<new>/mods/<original>/main.js`.
+5. Set every `cloned_from.version` to `<new>` and delete `upstream/<base>/`.
+6. `bin/sync` (no `FORKS` warnings), then look in the app (`herdr-app
+   status`, `herdr-app shot`). Also read the new `~/.config/herdr-app/AGENTS.md`
+   for changes that affect our own mods and layouts too (renamed commands,
+   `herdr` API changes).
+7. Commit: "Herdr <new>: update forks".
 
 ## Git
 

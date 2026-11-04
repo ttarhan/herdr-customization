@@ -15,6 +15,9 @@ folders (tested on 0.1.13), so files are copied, never linked.
 
 State of the last sync is kept in .sync-state.json (not committed) so a
 push never silently overwrites a file someone changed in herdr home.
+
+push and status also check our forks of Herdr's files against upstream/<version>/
+(see "Forks of Herdr's files" in AGENTS.md) and warn when Herdr has updated.
 """
 
 import hashlib
@@ -31,6 +34,7 @@ REPO = Path(__file__).resolve().parent.parent
 SRC = REPO / "config"
 STATE_FILE = REPO / ".sync-state.json"
 TYPES_DIR = REPO / "types"
+UPSTREAM = REPO / "upstream"
 DEST = Path(os.environ.get("HERDR_APP_HOME") or Path.home() / ".config" / "herdr-app")
 
 # Files Herdr writes into mod folders; never synced either way.
@@ -173,6 +177,53 @@ def refresh_types(quiet=False):
     return False
 
 
+def herdr_version():
+    try:
+        r = subprocess.run(["herdr-app", "--version"], capture_output=True, text=True)
+        return r.stdout.split()[-1] if r.returncode == 0 and r.stdout.split() else None
+    except FileNotFoundError:
+        return None
+
+
+def check_forks():
+    """Warn when our forks aren't based on the running Herdr version."""
+    forks = []  # (repo path, original path inside upstream/<version>/, cloned_from version)
+    for p in sorted((SRC / "layouts").glob("*.json")):
+        try:
+            c = json.loads(p.read_text()).get("cloned_from")
+        except json.JSONDecodeError:
+            continue
+        if c:
+            forks.append((f"layouts/{p.name}", f"layouts/{c['name']}.json", c.get("version")))
+    for p in sorted((SRC / "mods").glob("*/mod.json")):
+        try:
+            c = json.loads(p.read_text()).get("cloned_from")
+        except json.JSONDecodeError:
+            continue
+        if c:
+            forks.append((f"mods/{p.parent.name}", f"mods/{c['name']}", c.get("version")))
+    if (SRC / "keys.json").exists():
+        forks.append(("keys.json", "keys.json", None))
+    if not forks:
+        return
+    bases = sorted(d.name for d in UPSTREAM.glob("*") if d.is_dir()) if UPSTREAM.exists() else []
+    warn = []
+    if len(bases) != 1:
+        warn.append(f"upstream/ should hold exactly one version folder, found {bases or 'none'}")
+    base = bases[-1] if bases else None
+    running = herdr_version()
+    if base and running and running != base:
+        warn.append(f"Herdr is {running} but our forks are based on {base}: "
+                    "run \"On each Herdr update\" in AGENTS.md")
+    for rel, orig, version in forks:
+        if base and not (UPSTREAM / base / orig).exists():
+            warn.append(f"{rel}: its original upstream/{base}/{orig} is missing")
+        if version and base and version != base:
+            warn.append(f"{rel}: cloned_from.version is {version}, upstream/ is {base}")
+    for w in warn:
+        print("  FORKS  " + w)
+
+
 def push(force=False, quiet_when_clean=False):
     state = load_state()
     files = repo_files()
@@ -231,6 +282,7 @@ def push(force=False, quiet_when_clean=False):
     ok = run_checks(touched_mods)
     if wrote:
         ok = report_errors() and ok
+    check_forks()
     return ok and not skipped
 
 
@@ -283,6 +335,7 @@ def status():
             print(f"  {'deleted':<12} {rel}  (will be removed from herdr home on push)")
     if clean:
         print(f"  in sync: {len(files)} files")
+    check_forks()
     return clean
 
 
